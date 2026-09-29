@@ -18,10 +18,20 @@ Item {
     property var service: shell ? shell.serviceFor("surface.tablet") : null
     readonly property bool tablet: service ? service.tablet : false
     readonly property var internalScreen: Quickshell.screens.find(s => /^(eDP|DSI|LVDS)/.test(s.name)) || Quickshell.screens[0]
-    readonly property var entries: {
+    property var entries: []
+    property string entriesJson: ""
+
+    function updateEntries() {
         const layout = barConfig.layout || {}
-        return [].concat(layout.left || [], layout.center || [], layout.right || [])
+        const next = [].concat(layout.left || [], layout.center || [], layout.right || [])
+        const json = JSON.stringify(next)
+        if (json === entriesJson) return
+        entriesJson = json
+        entries = next
     }
+
+    onBarConfigChanged: updateEntries()
+    Component.onCompleted: updateEntries()
     readonly property var leftEntries: (barConfig.layout && barConfig.layout.left) || []
     readonly property var centerEntries: (barConfig.layout && barConfig.layout.center) || []
     readonly property var rightEntries: (barConfig.layout && barConfig.layout.right) || []
@@ -36,6 +46,298 @@ Item {
     readonly property string fontFamily: Style.font.family
     readonly property bool barHidden: false
     readonly property int barSize: hosts.length ? hosts[0].panelHeight : Style.bar.sizeHorizontal
+
+    property var barDragSource: null
+    property var barDragTarget: null
+    property var barDragTargetGeometry: null
+    property bool barDragAfter: false
+    property var barDragWindow: null
+    property var barDragScreen: null
+    property url barDragImageUrl: ""
+    property real barDragSceneX: 0
+    property real barDragSceneY: 0
+    property real barDragScreenX: 0
+    property real barDragScreenY: 0
+    property real barDragOffsetX: 0
+    property real barDragOffsetY: 0
+
+    function regionFor(moduleName) {
+        const contains = list => (list || []).some(e => (typeof e === "string" ? e : e.id) === moduleName)
+        if (contains(leftEntries)) return "left"
+        if (contains(rightEntries)) return "right"
+        return "center"
+    }
+
+    function clearBarDrag() {
+        barDragSource = null
+        barDragWindow = null
+        barDragScreen = null
+        barDragImageUrl = ""
+        barDragTarget = null
+        barDragTargetGeometry = null
+        barDragAfter = false
+        barDragSceneX = 0
+        barDragSceneY = 0
+        barDragScreenX = 0
+        barDragScreenY = 0
+        barDragOffsetX = 0
+        barDragOffsetY = 0
+    }
+
+    function captureBarDragGhost(slot) {
+        var it = slot && slot.item ? slot.item : slot
+        barDragImageUrl = ""
+        if (!it || typeof it.grabToImage !== "function") return
+
+        var grabWidth = Math.max(1, Math.ceil(it.width || it.implicitWidth || slot.width || 1))
+        var grabHeight = Math.max(1, Math.ceil(it.height || it.implicitHeight || slot.height || 1))
+        it.grabToImage(function(result) {
+            if (root.barDragSource !== slot || !result || !result.url) return
+            root.barDragImageUrl = result.url
+        }, Qt.size(grabWidth, grabHeight))
+    }
+
+    function startBarDrag(slot, pressedX, pressedY) {
+        barDragSource = slot
+        barDragWindow = (slot && slot.host && slot.host.barWindow) || (hosts.length ? hosts[0].barWindow : null)
+        barDragScreen = barDragWindow ? barDragWindow.screen : null
+        barDragOffsetX = pressedX
+        barDragOffsetY = pressedY
+        var scene = slot.mapToItem(null, pressedX, pressedY)
+        barDragSceneX = scene.x
+        barDragSceneY = scene.y
+        barDragScreenX = scene.x
+        barDragScreenY = scene.y
+        captureBarDragGhost(slot)
+    }
+
+    function nearestDropTarget(candidates, point) {
+        var rows = Array.isArray(candidates) ? candidates : []
+        var axis = Number(point && point.x)
+        if (!isFinite(axis)) return null
+
+        var best = null
+        var bestDistance = Infinity
+        for (var i = 0; i < rows.length; i++) {
+            var row = rows[i]
+            if (!row) continue
+
+            var start = Number(row.x)
+            var size = Number(row.width)
+            if (!isFinite(start) || !isFinite(size) || size <= 0) continue
+
+            var beforeDistance = Math.abs(axis - start)
+            var afterDistance = Math.abs(axis - (start + size))
+            var after = afterDistance < beforeDistance
+            var distance = after ? afterDistance : beforeDistance
+            if (distance < bestDistance) {
+                best = { candidate: row, after: after }
+                bestDistance = distance
+            }
+        }
+        return best
+    }
+
+    function dropMarkerRect(candidate, after) {
+        if (!candidate) return null
+        var thickness = Style.spacing.xs || 4
+        return {
+            x: candidate.x + (after ? candidate.width : 0) - thickness / 2,
+            y: candidate.y,
+            width: thickness,
+            height: candidate.height
+        }
+    }
+
+    function moduleDropAtScene(scenePoint, sourceSlot) {
+        var targetWindow = (sourceSlot && sourceSlot.host && sourceSlot.host.barWindow) || barDragWindow
+        if (!targetWindow) return null
+
+        var barY = scenePoint.y
+        try {
+            if (targetWindow.contentItem) {
+                var barPoint = targetWindow.contentItem.mapFromItem(null, scenePoint.x, scenePoint.y)
+                barY = barPoint.y
+            }
+        } catch (e) {
+            barY = scenePoint.y
+        }
+        if (barY < -60 || barY > targetWindow.height + 60) {
+            return null
+        }
+
+        var sourceHost = sourceSlot.host
+        var slots = sourceHost ? sourceHost.slots : []
+        var candidates = []
+
+        for (var i = 0; i < slots.length; i++) {
+            var slot = slots[i]
+            if (!slot || slot === sourceSlot || !slot.visible || slot.width <= 0 || slot.height <= 0) continue
+
+            var slotPoint = { x: slot.x, y: slot.y }
+            try {
+                slotPoint = slot.mapToItem(null, 0, 0)
+            } catch (e) {
+                continue
+            }
+
+            candidates.push({
+                slot: slot,
+                x: slotPoint.x,
+                y: slotPoint.y,
+                width: slot.width,
+                height: slot.height,
+                region: slot.region,
+                isPlaceholder: false
+            })
+        }
+
+        var hasLeft = candidates.some(c => c.region === "left")
+        var hasCenter = candidates.some(c => c.region === "center")
+        var hasRight = candidates.some(c => c.region === "right")
+
+        if (!hasLeft && sourceSlot.region !== "left") {
+            candidates.push({
+                region: "left",
+                isPlaceholder: true,
+                x: 0,
+                y: 0,
+                width: 60,
+                height: targetWindow.height
+            })
+        }
+        if (!hasCenter && sourceSlot.region !== "center") {
+            candidates.push({
+                region: "center",
+                isPlaceholder: true,
+                x: targetWindow.width / 2 - 30,
+                y: 0,
+                width: 60,
+                height: targetWindow.height
+            })
+        }
+        if (!hasRight && sourceSlot.region !== "right") {
+            candidates.push({
+                region: "right",
+                isPlaceholder: true,
+                x: targetWindow.width - 60,
+                y: 0,
+                width: 60,
+                height: targetWindow.height
+            })
+        }
+
+        return nearestDropTarget(candidates, scenePoint)
+    }
+
+    function updateBarDrag(scenePoint) {
+        if (!barDragSource || !barDragWindow) return
+        barDragSceneX = scenePoint.x
+        barDragSceneY = scenePoint.y
+        barDragScreenX = scenePoint.x
+        barDragScreenY = scenePoint.y
+
+        var drop = moduleDropAtScene(scenePoint, barDragSource)
+        barDragTarget = drop ? drop.candidate : null
+        barDragAfter = drop ? drop.after : false
+        barDragTargetGeometry = drop ? dropMarkerRect(drop.candidate, drop.after) : null
+    }
+
+    function nextVisibleModuleName(region, afterName, sourceSlot) {
+        const layout = root.barConfig.layout || {}
+        const entries = layout[region] || []
+        let found = false
+        for (let i = 0; i < entries.length; i++) {
+            const name = typeof entries[i] === "string" ? entries[i] : (entries[i] ? entries[i].id : "")
+            if (!found) {
+                if (name === afterName) found = true
+                continue
+            }
+            if (name && name !== (sourceSlot ? sourceSlot.moduleName : "")) return name
+        }
+        return ""
+    }
+
+    function dropBarModuleAtTarget(sourceSlot, targetCandidate, afterTarget) {
+        if (!sourceSlot || !targetCandidate) return false
+        if (targetCandidate.isPlaceholder) {
+            return dropBarModule(sourceSlot, targetCandidate.region, "")
+        }
+        const targetSlot = targetCandidate.slot
+        if (!targetSlot) return false
+        const toRegion = targetSlot.region
+        const beforeName = afterTarget
+            ? nextVisibleModuleName(toRegion, targetSlot.moduleName, sourceSlot)
+            : targetSlot.moduleName
+        return dropBarModule(sourceSlot, toRegion, beforeName)
+    }
+
+    function dropBarModule(sourceSlot, toRegion, beforeName) {
+        if (!sourceSlot || !sourceSlot.region || !sourceSlot.moduleName || !toRegion) return false
+        if (sourceSlot.region === toRegion && sourceSlot.moduleName === beforeName) return false
+        if (!root.shell || typeof root.shell.mutateShellConfig !== "function") return false
+
+        var changed = false
+        root.shell.mutateShellConfig(function(config) {
+            changed = moveModuleInConfig(config, sourceSlot.region, sourceSlot.moduleName, toRegion, beforeName)
+        })
+        return changed
+    }
+
+    function moveModuleInConfig(config, fromRegion, fromName, toRegion, beforeName) {
+        if (!config) return false
+        if (!config.bar) config.bar = {}
+        if (!config.bar.layout) config.bar.layout = {}
+        if (!Array.isArray(config.bar.layout[fromRegion])) config.bar.layout[fromRegion] = []
+        if (!Array.isArray(config.bar.layout[toRegion])) config.bar.layout[toRegion] = []
+
+        var fromEntries = config.bar.layout[fromRegion]
+        var toEntries = config.bar.layout[toRegion]
+
+        function entryId(entry) {
+            return typeof entry === "string" ? entry : (entry ? entry.id : "")
+        }
+
+        var fromIndex = -1
+        for (var i = 0; i < fromEntries.length; i++) {
+            if (entryId(fromEntries[i]) === fromName) { fromIndex = i; break }
+        }
+        if (fromIndex < 0) return false
+
+        var toIndex = toEntries.length
+        if (beforeName) {
+            for (var j = 0; j < toEntries.length; j++) {
+                if (entryId(toEntries[j]) === beforeName) { toIndex = j; break }
+            }
+        }
+
+        if (fromRegion === toRegion && fromIndex === toIndex) return false
+
+        var movedEntry = fromEntries[fromIndex]
+        fromEntries.splice(fromIndex, 1)
+
+        if (fromRegion === toRegion && fromIndex < toIndex) toIndex -= 1
+        if (toIndex < 0) toIndex = 0
+        if (toIndex > toEntries.length) toIndex = toEntries.length
+
+        if (fromRegion === toRegion && fromIndex === toIndex) {
+            fromEntries.splice(fromIndex, 0, movedEntry)
+            return false
+        }
+
+        toEntries.splice(toIndex, 0, movedEntry)
+        return true
+    }
+
+    function finishBarDrag(slot) {
+        var targetCandidate = barDragTarget
+        var afterTarget = barDragAfter
+        clearBarDrag()
+        if (targetCandidate) {
+            dropBarModuleAtTarget(slot, targetCandidate, afterTarget)
+        }
+    }
+
     function findPanelWidget(id) {
         const name = Hyprland.focusedMonitor ? Hyprland.focusedMonitor.name : ""
         const ordered = hosts.slice().sort((a, b) => (b.screenName === name ? 1 : 0) - (a.screenName === name ? 1 : 0))
@@ -89,6 +391,8 @@ Item {
                 property bool tabletMode: bar.tabletBar
                 property real viewportWidth: systemArea.width
                 property real contentWidth: systemArea.contentWidth
+                barWindow: bar
+                barRoot: root
                 shell: root.shell
                 tablet: false
                 animations: root.service ? root.service.status.animations !== false : true
@@ -160,7 +464,8 @@ Item {
                     anchors.verticalCenter: parent.verticalCenter
                     height: bar.rowHeight
                     clip: true
-                    contentWidth: Math.max(width, nativeLeft.width + desktopAnchor.width + nativeRight.width + Style.spacing.md * 2)
+                    interactive: !root.barDragSource && (systemArea.contentWidth > systemArea.width)
+                    contentWidth: Math.max(width, nativeLeft.width + centerGroup.width + nativeRight.width + Style.spacing.md * 2)
                     contentHeight: height
                     boundsBehavior: Flickable.StopAtBounds
                     flickableDirection: Flickable.HorizontalFlick
@@ -170,52 +475,215 @@ Item {
                         anchors.verticalCenter: parent.verticalCenter
                         spacing: Style.spacing.sm
                         Row { id: desktopLeft; spacing: Style.spacing.sm }
-                        Row { id: desktopBefore; spacing: Style.spacing.sm }
                     }
-                    Item {
-                        id: desktopAnchor
-                        x: Math.max(nativeLeft.width + Style.spacing.md,
-                            Math.min(bar.width / 2 - systemArea.x - width / 2,
-                                systemArea.contentWidth - nativeRight.width - Style.spacing.md - width))
+                    Row {
+                        id: centerGroup
                         anchors.verticalCenter: parent.verticalCenter
-                        width: childrenRect.width
-                        height: bar.rowHeight
+                        spacing: Style.spacing.sm
+                        x: {
+                            const minX = nativeLeft.width + Style.spacing.md
+                            const maxX = systemArea.contentWidth - nativeRight.width - Style.spacing.md - width
+                            if (desktopAnchor.width > 0) {
+                                const anchorOffset = desktopBefore.width + (desktopBefore.width > 0 ? spacing : 0) + desktopAnchor.width / 2
+                                const targetX = (bar.width / 2 - systemArea.x) - anchorOffset
+                                return Math.max(minX, Math.min(targetX, maxX))
+                            }
+                            return Math.max(minX, Math.min(bar.width / 2 - systemArea.x - width / 2, maxX))
+                        }
+                        Row { id: desktopBefore; spacing: Style.spacing.sm }
+                        Item {
+                            id: desktopAnchor
+                            width: childrenRect.width
+                            height: childrenRect.height
+                        }
+                        Row { id: desktopAfter; spacing: Style.spacing.sm }
                     }
                     Row {
                         id: nativeRight
                         x: systemArea.contentWidth - width
                         anchors.verticalCenter: parent.verticalCenter
                         spacing: Style.spacing.sm
-                        Row { id: desktopAfter; spacing: Style.spacing.sm }
                         Row { id: desktopRight; spacing: Style.spacing.sm }
                     }
                 }
             }
-            Instantiator {
-                model: root.entries
-                delegate: NativeWidget {
-                    required property var modelData
-                    entry: modelData
+            Component {
+                id: widgetComponent
+                NativeWidget {
                     registry: root.barWidgetRegistry
                     host: native
-                    // Keep the native widget alive so Desktop returns to the
-                    // same workspaces without moving or recreating any windows.
                     visible: !(bar.tabletBar && moduleName === "omarchy.workspaces")
-                    parent: {
-                        const anchorId = root.centerList.anchor ? (typeof root.centerList.anchor === "string" ? root.centerList.anchor : root.centerList.anchor.id) : ""
-                        const contains = list => list.some(e => (typeof e === "string" ? e : e.id) === moduleName)
-                        if (moduleName === anchorId) return desktopAnchor
-                        if (contains(root.leftEntries)) return desktopLeft
-                        if (contains(root.rightEntries)) return desktopRight
-                        return contains(root.centerList.before) ? desktopBefore : desktopAfter
+                }
+            }
+
+            property var activeWidgets: ({})
+
+            function getTargetParent(moduleName) {
+                const anchorId = root.centerList.anchor ? (typeof root.centerList.anchor === "string" ? root.centerList.anchor : root.centerList.anchor.id) : ""
+                const contains = list => list.some(e => (typeof e === "string" ? e : e.id) === moduleName)
+                if (moduleName === anchorId) return desktopAnchor
+                if (contains(root.leftEntries)) return desktopLeft
+                if (contains(root.rightEntries)) return desktopRight
+                return contains(root.centerList.before) ? desktopBefore : desktopAfter
+            }
+
+            function syncOrder() {
+                const rows = [
+                    { parent: desktopLeft, entries: root.leftEntries },
+                    { parent: desktopBefore, entries: root.centerList.before },
+                    { parent: desktopAfter, entries: root.centerList.after },
+                    { parent: desktopRight, entries: root.rightEntries }
+                ]
+                for (let r = 0; r < rows.length; r++) {
+                    const rowParent = rows[r].parent
+                    const list = rows[r].entries || []
+                    const items = []
+                    for (let i = 0; i < list.length; i++) {
+                        const id = typeof list[i] === "string" ? list[i] : (list[i] ? list[i].id : "")
+                        const widget = activeWidgets[id]
+                        if (widget && widget.parent === rowParent) {
+                            items.push(widget)
+                        }
+                    }
+                    if (items.length > 0) {
+                        for (let i = 0; i < items.length; i++) {
+                            items[i].parent = null
+                        }
+                        for (let i = 0; i < items.length; i++) {
+                            items[i].parent = rowParent
+                        }
+                        if (typeof rowParent.forceLayout === "function") {
+                            rowParent.forceLayout()
+                        }
                     }
                 }
+            }
+
+            function updateWidgets() {
+                const currentEntries = root.entries || []
+                const desired = {}
+                for (let i = 0; i < currentEntries.length; i++) {
+                    const entry = currentEntries[i]
+                    const id = typeof entry === "string" ? entry : (entry ? entry.id : "")
+                    if (!id) continue
+                    desired[id] = entry
+                }
+
+                const nextWidgets = Object.assign({}, activeWidgets)
+                for (const id in nextWidgets) {
+                    if (!desired[id]) {
+                        const w = nextWidgets[id]
+                        if (w) w.destroy()
+                        delete nextWidgets[id]
+                    }
+                }
+
+                for (let i = 0; i < currentEntries.length; i++) {
+                    const entry = currentEntries[i]
+                    const id = typeof entry === "string" ? entry : (entry ? entry.id : "")
+                    if (!id) continue
+
+                    const targetParent = getTargetParent(id)
+                    let widget = nextWidgets[id]
+                    if (!widget) {
+                        widget = widgetComponent.createObject(targetParent, {
+                            entry: entry
+                        })
+                        if (widget) nextWidgets[id] = widget
+                    } else {
+                        widget.entry = entry
+                        if (widget.parent !== targetParent) {
+                            widget.parent = targetParent
+                        }
+                    }
+                }
+
+                activeWidgets = nextWidgets
+                syncOrder()
+            }
+
+            Component.onCompleted: updateWidgets()
+            Connections {
+                target: root
+                function onEntriesChanged() { bar.updateWidgets() }
+                function onCenterListChanged() { bar.updateWidgets() }
+                function onLeftEntriesChanged() { bar.updateWidgets() }
+                function onRightEntriesChanged() { bar.updateWidgets() }
             }
             component NavButton: TouchButton {
                 width: bar.rowHeight
                 height: bar.rowHeight
                 iconSize: Style.font.icon
                 animations: native.animations
+            }
+        }
+    }
+
+    Variants {
+        model: Quickshell.screens
+        PanelWindow {
+            id: dragGhostWindow
+            required property var modelData
+            screen: modelData
+            readonly property bool screenMatches: root.barDragScreen === modelData ||
+                (root.barDragScreen && modelData && root.barDragScreen.name && modelData.name && root.barDragScreen.name === modelData.name)
+            readonly property bool active: root.barDragSource && root.barDragScreen && screenMatches
+            readonly property var sourceItem: root.barDragSource ? (root.barDragSource.item || root.barDragSource) : null
+            readonly property int ghostPadding: Style.space(1)
+            readonly property int ghostWidth: sourceItem ? Math.max(1, Math.ceil(sourceItem.width)) : 1
+            readonly property int ghostHeight: sourceItem ? Math.max(1, Math.ceil(sourceItem.height)) : 1
+
+            visible: active && sourceItem !== null
+            color: "transparent"
+            exclusionMode: ExclusionMode.Ignore
+            WlrLayershell.namespace: "omarchy-bar-drag-ghost"
+            WlrLayershell.layer: WlrLayer.Overlay
+            WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
+
+            anchors {
+                top: true
+                bottom: true
+                left: true
+                right: true
+            }
+
+            mask: Region {}
+
+            Item {
+                visible: dragGhostWindow.visible
+                x: Math.round(root.barDragScreenX - root.barDragOffsetX - dragGhostWindow.ghostPadding)
+                y: Math.round(root.barDragScreenY - root.barDragOffsetY - dragGhostWindow.ghostPadding)
+                width: dragGhostWindow.ghostWidth + dragGhostWindow.ghostPadding * 2
+                height: dragGhostWindow.ghostHeight + dragGhostWindow.ghostPadding * 2
+
+                Rectangle {
+                    anchors.fill: parent
+                    color: root.barConfig.transparent ? "transparent" : Color.bar.background
+                    border.color: Color.bar.text
+                    border.width: 1
+                    radius: Math.min(Style.cornerRadius, height / 2)
+                    opacity: root.barConfig.transparent ? 0.45 : 0.94
+                }
+
+                Image {
+                    anchors.fill: parent
+                    anchors.margins: dragGhostWindow.ghostPadding
+                    source: root.barDragImageUrl
+                    fillMode: Image.Stretch
+                    smooth: true
+                    opacity: 0.85
+                }
+            }
+
+            Rectangle {
+                readonly property var targetRect: root.barDragTargetGeometry
+                visible: dragGhostWindow.active && targetRect !== null
+                x: targetRect ? Math.round(targetRect.x) : 0
+                y: targetRect ? Math.round(targetRect.y) : 0
+                width: targetRect ? targetRect.width : 0
+                height: targetRect ? targetRect.height : 0
+                color: Color.accent
+                radius: Math.min(width, height) / 2
             }
         }
     }
