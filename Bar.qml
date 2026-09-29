@@ -18,10 +18,20 @@ Item {
     property var service: shell ? shell.serviceFor("surface.tablet") : null
     readonly property bool tablet: service ? service.tablet : false
     readonly property var internalScreen: Quickshell.screens.find(s => /^(eDP|DSI|LVDS)/.test(s.name)) || Quickshell.screens[0]
-    readonly property var entries: {
+    property var entries: []
+    property string entriesJson: ""
+
+    function updateEntries() {
         const layout = barConfig.layout || {}
-        return [].concat(layout.left || [], layout.center || [], layout.right || [])
+        const next = [].concat(layout.left || [], layout.center || [], layout.right || [])
+        const json = JSON.stringify(next)
+        if (json === entriesJson) return
+        entriesJson = json
+        entries = next
     }
+
+    onBarConfigChanged: updateEntries()
+    Component.onCompleted: updateEntries()
     readonly property var leftEntries: (barConfig.layout && barConfig.layout.left) || []
     readonly property var centerEntries: (barConfig.layout && barConfig.layout.center) || []
     readonly property var rightEntries: (barConfig.layout && barConfig.layout.right) || []
@@ -191,25 +201,101 @@ Item {
                     }
                 }
             }
-            Instantiator {
-                model: root.entries
-                delegate: NativeWidget {
-                    required property var modelData
-                    entry: modelData
+            Component {
+                id: widgetComponent
+                NativeWidget {
                     registry: root.barWidgetRegistry
                     host: native
-                    // Keep the native widget alive so Desktop returns to the
-                    // same workspaces without moving or recreating any windows.
                     visible: !(bar.tabletBar && moduleName === "omarchy.workspaces")
-                    parent: {
-                        const anchorId = root.centerList.anchor ? (typeof root.centerList.anchor === "string" ? root.centerList.anchor : root.centerList.anchor.id) : ""
-                        const contains = list => list.some(e => (typeof e === "string" ? e : e.id) === moduleName)
-                        if (moduleName === anchorId) return desktopAnchor
-                        if (contains(root.leftEntries)) return desktopLeft
-                        if (contains(root.rightEntries)) return desktopRight
-                        return contains(root.centerList.before) ? desktopBefore : desktopAfter
+                }
+            }
+
+            property var activeWidgets: ({})
+
+            function getTargetParent(moduleName) {
+                const anchorId = root.centerList.anchor ? (typeof root.centerList.anchor === "string" ? root.centerList.anchor : root.centerList.anchor.id) : ""
+                const contains = list => list.some(e => (typeof e === "string" ? e : e.id) === moduleName)
+                if (moduleName === anchorId) return desktopAnchor
+                if (contains(root.leftEntries)) return desktopLeft
+                if (contains(root.rightEntries)) return desktopRight
+                return contains(root.centerList.before) ? desktopBefore : desktopAfter
+            }
+
+            function syncOrder() {
+                const rows = [
+                    { parent: desktopLeft, entries: root.leftEntries },
+                    { parent: desktopBefore, entries: root.centerList.before },
+                    { parent: desktopAfter, entries: root.centerList.after },
+                    { parent: desktopRight, entries: root.rightEntries }
+                ]
+                for (let r = 0; r < rows.length; r++) {
+                    const rowInfo = rows[r]
+                    const rowParent = rowInfo.parent
+                    const list = rowInfo.entries || []
+                    let prev = null
+                    for (let i = 0; i < list.length; i++) {
+                        const id = typeof list[i] === "string" ? list[i] : (list[i] ? list[i].id : "")
+                        const widget = activeWidgets[id]
+                        if (widget && widget.parent === rowParent) {
+                            if (prev && typeof widget.stackAfter === "function") {
+                                widget.stackAfter(prev)
+                            }
+                            prev = widget
+                        }
                     }
                 }
+            }
+
+            function updateWidgets() {
+                const currentEntries = root.entries || []
+                const desired = {}
+                for (let i = 0; i < currentEntries.length; i++) {
+                    const entry = currentEntries[i]
+                    const id = typeof entry === "string" ? entry : (entry ? entry.id : "")
+                    if (!id) continue
+                    desired[id] = entry
+                }
+
+                const nextWidgets = Object.assign({}, activeWidgets)
+                for (const id in nextWidgets) {
+                    if (!desired[id]) {
+                        const w = nextWidgets[id]
+                        if (w) w.destroy()
+                        delete nextWidgets[id]
+                    }
+                }
+
+                for (let i = 0; i < currentEntries.length; i++) {
+                    const entry = currentEntries[i]
+                    const id = typeof entry === "string" ? entry : (entry ? entry.id : "")
+                    if (!id) continue
+
+                    const targetParent = getTargetParent(id)
+                    let widget = nextWidgets[id]
+                    if (!widget) {
+                        widget = widgetComponent.createObject(targetParent, {
+                            entry: entry
+                        })
+                        if (widget) nextWidgets[id] = widget
+                    } else {
+                        widget.entry = entry
+                        if (widget.parent !== targetParent) {
+                            widget.parent = targetParent
+                        }
+                    }
+                }
+
+                activeWidgets = nextWidgets
+                syncOrder()
+            }
+
+            Component.onCompleted: updateWidgets()
+            Connections {
+                target: root
+                function onEntriesChanged() { bar.updateWidgets() }
+                function onCenterListChanged() { bar.updateWidgets() }
+                function onLeftEntriesChanged() { bar.updateWidgets() }
+                function onRightEntriesChanged() { bar.updateWidgets() }
             }
             component NavButton: TouchButton {
                 width: bar.rowHeight
