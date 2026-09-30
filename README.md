@@ -26,36 +26,47 @@ The plugin replaces the whole bar with one top row. Desktop mode is not an exact
 
 - **Home and applications:** favorites, search and a touch grid. Hold an app or use **All apps → Edit** to manage favorites.
 - **Window switcher:** tap Windows, or swipe up/hold the bottom grip. Cards show icons and titles; tap to focus or use ✕ to close. Tap the grip for Home.
-- **One top bar:** native widgets keep their actions and popups. Workspace numbers hide on the tablet display in Tablet mode and return in Desktop. Swipe the system widget area horizontally on narrow displays.
+- **One top bar:** native widgets keep their actions and popups. Workspace numbers hide on the tablet display in Tablet mode and return in Desktop. Drag-and-drop reordering is supported across bar sections. Swipe the system widget area horizontally on narrow displays.
+- **Automatic screen rotation:** hardware sensor orientation detection via `iio-sensor-proxy` with settings toggles to turn off auto-rotation or lock current orientation.
 - **On-screen keyboard:** Squeekboard opens automatically in compatible Wayland text fields in Tablet mode, or only on request with **Button only**. Choose Omarchy, Rounded or High contrast appearance; all follow the active theme. Style changes apply after hiding and reopening the keyboard.
 - **Dictation shortcuts:** microphone buttons in the bar and above the keyboard invoke Murmure, or your configured command, without requesting keyboard focus. Speech recognition is provided by that application.
 - **Omarchy integration:** live colors and typography, clipboard/emoji/menu shortcuts and an on-demand opaque Home surface. The wallpaper remains unchanged; window cards use no live thumbnails.
 
 ## Compatibility and dependencies
 
-Reference machine inspected for this release: **Surface Pro 4**, **Omarchy 4.0.4-1**, **Hyprland 0.56.2-2** (Lua API), **Quickshell 0.3.1-1**, **linux-surface 6.19.8-arch1-3-surface**, display scale 2×. These are observed versions, not a promise that every earlier or later release works.
+Reference machine inspected for this release: **Surface Pro 4**, **Omarchy 4.0.4-1**, **Hyprland 0.56.2-2** (Lua API), **Quickshell 0.3.1-1**, **linux-surface 6.19.8-arch1-3-surface**, display scale 2×. Validated on **Surface Go 2** with stock factory kernel (`7.2.5-3-omarchy`). These are observed versions, not a promise that every earlier or later release works.
 
 This requires the **Quickshell-based Omarchy shell**, its `qs.Commons`/`qs.Ui` components, app library and widget registry. It is not compatible with the older Waybar setup.
 
-| Dependency | Purpose |
-| --- | --- |
-| Python **3.11+** | Backend, installer and `tomllib` theme parsing; no pip packages required |
-| `python-gobject` | D-Bus keyboard visibility watcher |
-| `hyprctl`, `omarchy-shell`, Quickshell | Window management and shell integration |
-| systemd user session, `systemctl`, `systemd-run`, `busctl` | Owned keyboard service and D-Bus control |
-| `gsettings` (`glib2`), desktop schemas | Keyboard accessibility and input-source settings |
-| `gtk-launch` (`gtk3`), `uwsm-app` (`uwsm`) | Launch installed desktop applications |
-| `squeekboard` | Optional for the shell UI; required for the on-screen keyboard |
-| Murmure or another dictation executable | Optional; install and configure separately |
+| Dependency | Package (Arch Linux) | Purpose |
+| --- | --- | --- |
+| Python **3.11+** | `python` | Backend, installer and `tomllib` theme parsing; no pip packages required |
+| `python-gobject` | `python-gobject` | D-Bus bindings for keyboard watcher and accelerometer sensor proxy |
+| `iio-sensor-proxy` | `iio-sensor-proxy` | System accelerometer sensor daemon for automatic screen rotation |
+| `squeekboard` | `squeekboard` | Wayland on-screen keyboard (required for on-screen touch typing) |
+| `hyprctl`, `omarchy-shell`, Quickshell | built-in | Window management, monitor rotation, and shell integration |
+| systemd user session, `systemctl`, `systemd-run`, `busctl` | `systemd` | Owned keyboard service and D-Bus control |
+| `gsettings` (`glib2`), desktop schemas | `glib2` | Keyboard accessibility and input-source settings |
+| `gtk-launch` (`gtk3`), `uwsm-app` (`uwsm`) | `gtk3`, `uwsm` | Launch installed desktop applications |
+| Murmure or another dictation executable | optional | Speech-to-text dictation; install and configure separately |
 
-The plugin installs no packages or hardware drivers. Touchscreen, stylus, rotation and suspend support depend on the device's Linux setup. The linux-surface kernel is the development machine's configuration, not a universal requirement. Automatic screen rotation is not implemented by this plugin.
+### Quick dependency setup
+
+Install the required packages and enable the sensor daemon:
+
+```sh
+sudo pacman -S iio-sensor-proxy python-gobject squeekboard
+sudo systemctl enable --now iio-sensor-proxy.service
+```
+
+The plugin installs no hardware drivers. Touchscreen, stylus and suspend support depend on the device's Linux setup. Automatic screen rotation requires `iio-sensor-proxy` with an accelerometer supported by your kernel (such as `intel-ish-hid` on the factory kernel for Surface Go 2, or `linux-surface` where required).
 
 ## Install from GitHub
 
-Install this public repository with Omarchy's standard installer:
+Install this repository with Omarchy's standard installer:
 
 ```sh
-omarchy plugin add https://github.com/varlet99/omarchy-tablet.git --enable
+omarchy plugin add https://github.com/ekiel/omarchy-tablet.git --enable
 ```
 
 Review the source and dependencies before enabling. Enabling selects the replacement bar and may immediately enter Tablet mode if no physical keyboard is detected. Note the name of your previous bar if you use a custom one.

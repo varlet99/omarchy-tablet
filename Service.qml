@@ -84,6 +84,9 @@ Item {
         function keyboardActivation(value: string): void { root.command("keyboardActivation", value) }
         function keyboardStyle(value: string): void { root.command("keyboardStyle", value) }
         function keyboard(): void { root.command("keyboard") }
+        function autoRotate(value: string): void { root.command("autoRotate", value === "true" || value === "on" || value === "auto") }
+        function rotationLock(value: string): void { root.command("rotationLock", value === "true" || value === "lock" || value === "locked" ? true : (value === "toggle" ? "toggle" : false)) }
+        function orientation(value: string): void { root.command("orientation", Number(value)) }
         function build(): string { return Qt.resolvedUrl("tablet.py").toString() }
         function status(): string { return JSON.stringify(root.status) }
         function view(): string { return JSON.stringify({home: root.homeOpen, switcher: root.switcherOpen, page: root.page, keyboard: root.keyboardVisible}) }

@@ -268,6 +268,42 @@ Item {
                     wrapMode: Text.WordWrap
                     color: Color.menu.text; font.pixelSize: Style.font.body; font.family: Style.font.family
                 }
+                Text { text: "Screen rotation"; color: Color.menu.text; font.pixelSize: Style.font.heading; font.family: Style.font.family }
+                Flow {
+                    Layout.fillWidth: true
+                    spacing: Style.spacing.controlGap
+                    Repeater {
+                        model: [{label: "Automatic", value: true}, {label: "Off", value: false}]
+                        Button {
+                            required property var modelData
+                            text: modelData.label; foreground: Color.menu.text; accent: Color.accent; bordered: true
+                            selected: root.service && (root.service.status.autoRotate === modelData.value || (root.service.status.autoRotate === undefined && modelData.value === true))
+                            onClicked: root.service.command("autoRotate", modelData.value)
+                        }
+                    }
+                    Repeater {
+                        model: [{label: "Rotation locked", value: true}, {label: "Unlocked", value: false}]
+                        Button {
+                            required property var modelData
+                            text: modelData.label; foreground: Color.menu.text; accent: Color.accent; bordered: true
+                            selected: root.service && root.service.status.rotationLocked === modelData.value
+                            enabled: root.service && root.service.status.autoRotate !== false
+                            onClicked: root.service.command("rotationLock", modelData.value)
+                        }
+                    }
+                }
+                Text {
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                    text: root.service && root.service.status.sensorAvailable === false
+                        ? "No accelerometer sensor detected on this device."
+                        : (root.service && root.service.status.rotationLocked
+                            ? "Rotation is locked. The screen will stay in the current orientation."
+                            : (root.service && root.service.status.autoRotate !== false
+                                ? "Automatic rotates the display when tilting your device."
+                                : "Auto-rotation is turned off."))
+                    color: Color.menu.text; font.pixelSize: Style.font.body; font.family: Style.font.family
+                }
                 Text { text: "Keyboard activation"; color: Color.menu.text; font.pixelSize: Style.font.heading; font.family: Style.font.family }
                 Flow {
                     Layout.fillWidth: true

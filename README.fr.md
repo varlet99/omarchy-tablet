@@ -35,12 +35,19 @@ L’interface du plugin est actuellement en anglais. La langue du clavier est in
 
 ## Installation et retrait
 
-Le [README anglais](README.md#compatibility-and-dependencies) donne les dépendances et les procédures complètes. La base utilisée est Omarchy 4.0.4, Quickshell 0.3.1 et Hyprland 0.56.2. Python 3.11+ et PyGObject sont nécessaires; Squeekboard fournit le clavier et Murmure est optionnel. Les anciennes installations utilisant Waybar ne sont pas prises en charge.
+Le [README anglais](README.md#compatibility-and-dependencies) donne les dépendances et les procédures complètes. La base utilisée est Omarchy 4.0.4, Quickshell 0.3.1 et Hyprland 0.56.2. Python 3.11+, PyGObject (`python-gobject`) et `iio-sensor-proxy` sont nécessaires; Squeekboard fournit le clavier et Murmure est optionnel.
 
-Installer depuis le dépôt public :
+Installation des dépendances :
 
 ```sh
-omarchy plugin add https://github.com/varlet99/omarchy-tablet.git --enable
+sudo pacman -S iio-sensor-proxy python-gobject squeekboard
+sudo systemctl enable --now iio-sensor-proxy.service
+```
+
+Installer depuis le dépôt :
+
+```sh
+omarchy plugin add https://github.com/ekiel/omarchy-tablet.git --enable
 omarchy plugin update surface.tablet
 # Désactiver et revenir à la barre Omarchy :
 omarchy plugin disable surface.tablet
@@ -52,6 +59,6 @@ Pour le développement depuis un clone séparé, `python3 install.py` installe u
 
 ## Compatibilité et état du projet
 
-Le plugin n’installe ni noyau, ni pilote, ni service de rotation. La prise en charge du tactile, du stylet, de l’accéléromètre et de la veille dépend de Linux sur chaque appareil. Les écrans externes conservent leur disposition de fenêtres, mais utilisent eux aussi la barre de remplacement.
+La rotation automatique utilise `iio-sensor-proxy` avec l’accéléromètre pris en charge par le noyau (tel que `intel-ish-hid` sur le noyau d'origine pour Surface Go 2). La prise en charge du tactile, du stylet et de la veille dépend de Linux sur chaque appareil. Les écrans externes conservent leur disposition de fenêtres, mais utilisent eux aussi la barre de remplacement.
 
 La navigation et les mécanismes de restauration ont des tests; les essais physiques au doigt, le détachement/rebranchement réel du clavier et une dictée complète restent à confirmer pour la publication. Les limites précises figurent dans le [bilan de préparation](docs/release-readiness.md). Licence [MIT](LICENSE).

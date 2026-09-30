@@ -169,6 +169,20 @@ class LayoutTests(unittest.TestCase):
         self.layout.reconcile(True)
         self.assertEqual(self.layout.windows["0xcd"]["internal"], 0)
 
+    def test_reconcile_force_refreshes_maximized_window(self):
+        self.layout.reconcile(True)
+        self.active["fullscreen"] = 1
+        self.calls.clear()
+        # Normal reconcile does nothing if already fullscreen
+        self.layout.reconcile(True, force=False)
+        self.assertEqual(len([c for c in self.calls if c[1] == "eval"]), 0)
+        # Forced reconcile unsets and resets to force geometry recalculation
+        self.layout.reconcile(True, force=True)
+        eval_calls = [c[-1] for c in self.calls if c[1] == "eval"]
+        self.assertEqual(len(eval_calls), 2)
+        self.assertIn("internal=0", eval_calls[0])
+        self.assertIn("internal=1", eval_calls[1])
+
     def test_dispatch_address_validation(self):
         with self.assertRaises(ValueError):
             self.layout.set_state('bad"address', 0, 0)

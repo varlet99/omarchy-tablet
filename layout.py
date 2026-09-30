@@ -72,10 +72,20 @@ class SingleApp:
         self.restore(clients, stale)
         return clients
 
-    def reconcile(self, enabled):
+    def reconcile(self, enabled, force=False):
         if not enabled:
             self._known_clients = None
             self.restore()
+            if force:
+                try:
+                    active = json.loads(run("hyprctl", "-j", "activewindow").stdout)
+                    if active.get("fullscreen") == 1 and active.get("address"):
+                        addr = active["address"]
+                        cl = active.get("fullscreenClient", 0)
+                        self.set_state(addr, 0, cl)
+                        self.set_state(addr, 1, cl)
+                except Exception:
+                    pass
             return
 
         # The daemon invokes this on compositor events, not every polling tick.
@@ -132,3 +142,7 @@ class SingleApp:
             self.save()  # write-ahead recovery on reload, crash or detach
         if active.get("fullscreen") != 1:
             self.set_state(address, 1, self.windows[address]["client"])
+        elif force:
+            cl = self.windows[address]["client"]
+            self.set_state(address, 0, cl)
+            self.set_state(address, 1, cl)

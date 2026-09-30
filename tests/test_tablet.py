@@ -1,7 +1,9 @@
 from types import SimpleNamespace
 import copy
 import json
+import os
 from pathlib import Path
+import select
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -85,6 +87,56 @@ class PersistenceTests(unittest.TestCase):
             self.assertIn("Google Photos", again.preferences["favorites"])
             again.command({"action": "favorite", "value": "Google Photos"})
             self.assertNotIn("Google Photos", again.preferences["favorites"])
+
+    def test_auto_rotate_and_rotation_lock_preferences(self):
+        with tempfile.TemporaryDirectory() as folder, patch.dict("os.environ", {"XDG_RUNTIME_DIR": folder}):
+            backend = Backend(Path(folder) / "state")
+            self.assertTrue(backend.preferences["autoRotate"])
+            self.assertFalse(backend.preferences["rotationLocked"])
+            backend.command({"action": "autoRotate", "value": False})
+            backend.command({"action": "rotationLock", "value": True})
+            self.assertFalse(backend.preferences["autoRotate"])
+            self.assertTrue(backend.preferences["rotationLocked"])
+            again = Backend(Path(folder) / "state")
+            self.assertFalse(again.preferences["autoRotate"])
+            self.assertTrue(again.preferences["rotationLocked"])
+            state = again.state()
+            self.assertFalse(state["autoRotate"])
+            self.assertTrue(state["rotationLocked"])
+            again.command({"action": "rotationLock", "value": "toggle"})
+            self.assertFalse(again.preferences["rotationLocked"])
+
+    def test_rotate_configures_monitor_and_touch_devices(self):
+        with tempfile.TemporaryDirectory() as folder, patch.dict("os.environ", {"XDG_RUNTIME_DIR": folder}):
+            backend = Backend(Path(folder) / "state")
+            calls = []
+            def fake_run(*args, **kwargs):
+                calls.append(args)
+                if len(args) >= 3 and args[1] == "-j" and args[2] == "monitors":
+                    return SimpleNamespace(stdout=json.dumps([{"name": "eDP-1", "scale": 1.6, "transform": 0}]), returncode=0)
+                if len(args) >= 3 and args[1] == "-j" and args[2] == "devices":
+                    return SimpleNamespace(stdout=json.dumps({"touch": [{"name": "elan-touch"}], "tablets": [{"name": "elan-stylus"}]}), returncode=0)
+                return SimpleNamespace(stdout="ok", returncode=0)
+
+            with patch("tablet.run", side_effect=fake_run):
+                success = backend.rotate(1)
+                self.assertTrue(success)
+                self.assertEqual(backend.current_transform, 1)
+                self.assertTrue(backend.layout_dirty)
+                self.assertTrue(backend.layout_force)
+                eval_commands = [c[2] for c in calls if len(c) >= 3 and c[0] == "hyprctl" and c[1] == "eval"]
+                self.assertTrue(any("hl.monitor" in cmd and "transform=1" in cmd and 'output="eDP-1"' in cmd for cmd in eval_commands))
+                self.assertTrue(any("hl.config" in cmd and "touchdevice" in cmd and "transform = 1" in cmd for cmd in eval_commands))
+                self.assertTrue(any("hl.device" in cmd and 'name = "elan-touch"' in cmd and "transform = 1" in cmd for cmd in eval_commands))
+                self.assertTrue(any("hl.device" in cmd and 'name = "elan-stylus"' in cmd and "transform = 1" in cmd for cmd in eval_commands))
+
+    def test_wakeup_pipe(self):
+        with tempfile.TemporaryDirectory() as folder, patch.dict("os.environ", {"XDG_RUNTIME_DIR": folder}):
+            backend = Backend(Path(folder) / "state")
+            backend.wakeup()
+            r, _, _ = select.select([backend._wake_r], [], [], 0.1)
+            self.assertIn(backend._wake_r, r)
+            os.read(backend._wake_r, 10)
 
     def test_failed_keyboard_start_restores_input_method(self):
         with tempfile.TemporaryDirectory() as folder, patch.dict("os.environ", {"XDG_RUNTIME_DIR": folder}):
